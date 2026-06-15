@@ -15,7 +15,7 @@ SETUP:
 # ============================================================
 # CELL 1 - Install dependencies
 # ============================================================
-# !pip install transformers>=4.35.0 accelerate requests fastapi uvicorn pyngrok -q
+# !pip install transformers>=4.35.0 accelerate requests fastapi uvicorn -q
 
 # ============================================================
 # CELL 2 - Imports and config
@@ -226,21 +226,13 @@ def get_conversation(article_id: str):
 
 
 # ============================================================
-# CELL 6 - Start Server with ngrok
+# CELL 6 - Start Server with localtunnel
 # ============================================================
-from pyngrok import ngrok
+import subprocess
+import time
 
-# Kill any existing tunnels
-ngrok.kill()
-
-# Create tunnel
-public_url = ngrok.connect(8000).public_url
-print(f"\n{'='*50}")
-print(f"API URL: {public_url}")
-print(f"{'='*50}")
-print(f"\nCopy this URL and update bot.py:")
-print(f'KAGGLE_API_URL = "{public_url}"')
-print(f"\n{'='*50}")
+# Install localtunnel
+subprocess.run(["npm", "install", "-g", "localtunnel"], capture_output=True)
 
 # Start server in background thread
 def run_server():
@@ -250,5 +242,38 @@ def run_server():
 server_thread = threading.Thread(target=run_server, daemon=True)
 server_thread.start()
 
-print("\nServer started! Ready to accept requests.")
-print("Keep this notebook running while using the bot.")
+time.sleep(3)
+
+# Create tunnel
+print("Creating public tunnel...")
+result = subprocess.run(
+    ["lt", "--port", "8000"],
+    capture_output=True,
+    text=True,
+    timeout=30
+)
+
+# Get the URL from output
+public_url = None
+for line in result.stdout.split("\n"):
+    if "your url is:" in line.lower() or "url is" in line.lower():
+        public_url = line.split(":")[-1].strip()
+        break
+
+if not public_url:
+    # Try to find URL pattern
+    import re
+    urls = re.findall(r'https?://[^\s]+', result.stdout + result.stderr)
+    if urls:
+        public_url = urls[0]
+
+if public_url:
+    print(f"\n{'='*50}")
+    print(f"API URL: {public_url}")
+    print(f"{'='*50}")
+    print(f"\nCopy this URL and update bot.py .env:")
+    print(f'KAGGLE_API_URL="{public_url}"')
+    print(f"\n{'='*50}")
+else:
+    print("Could not get URL. Check the output above.")
+    print("Look for a URL in the output.")

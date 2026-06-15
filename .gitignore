@@ -1,0 +1,9 @@
+ai_news_finder/.env
+__pycache__/
+*.pyc
+.DS_Store
+reports/*.html
+reports/*.txt
+reports/*.json
+!reports/.gitkeep
+telegram_bot/.env

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Telegram bot for AI News - AI SANGH Style with continuous conversation."""
+"""Telegram bot for AI News - AI SANGH Style with direct API."""
 
 import logging
 import os
+import requests
 from pathlib import Path
 from typing import Optional
 
@@ -21,7 +22,6 @@ _env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(_env_path)
 
 from news_manager import news_manager
-from github_storage import github_storage
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -29,74 +29,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Content generation commands
-GENERATION_COMMANDS = [
-    "generate",
-    "shorter",
-    "longer",
-    "more viral",
-    "carousel",
-    "caption",
-    "30 second reel",
-    "60 second reel",
-    "proceed",
-]
+# Kaggle API URL - update this after starting the notebook
+KAGGLE_API_URL = os.getenv("KAGGLE_API_URL", "")
+
+# Conversation memory
+conversations = {}
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command."""
-    welcome_message = (
+    await update.message.reply_text(
         "👋 Welcome to AI SANGH Bot!\n\n"
-        "I help you create scroll-stopping AI content.\n\n"
         "📰 /news - See latest topics\n"
-        "🔍 /status - Check Qwen availability\n"
-        "❓ /help - All commands\n\n"
-        "Workflow:\n"
-        "1. /news → Select topic\n"
-        "2. Paste article text\n"
-        "3. Get AI SANGH Stage 1\n"
-        "4. Say 'proceed' for Stage 2\n"
-        "5. Keep refining until you love it"
+        "🔍 /status - Check Qwen\n"
+        "❓ /help - All commands"
     )
-    await update.message.reply_text(welcome_message)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command."""
-    help_text = (
+    await update.message.reply_text(
         "📖 *Commands*\n\n"
         "📰 /news - Show topics\n"
         "🔍 /status - Check Qwen\n"
         "❓ /help - This message\n\n"
         "*After selecting a topic:*\n"
         "• Paste article text → Get Stage 1\n"
-        "• proceed → Get Stage 2 (full prompts)\n"
-        "• shorter → Make shorter\n"
-        "• longer → Expand\n"
-        "• more viral → More engaging\n"
-        "• carousel → Carousel format\n"
-        "• caption → Social caption\n"
-        "• 30 second reel → Short reel\n"
-        "• 60 second reel → Medium reel\n\n"
-        "*Context is remembered per article!*"
+        "• proceed → Get Stage 2\n"
+        "• shorter / longer / more viral → Refine\n"
+        "• carousel / caption → Different formats\n"
+        "• 30 second reel / 60 second reel → Reels\n\n"
+        "*Context is remembered!*",
+        parse_mode="Markdown",
     )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /status command."""
-    kaggle_status = os.getenv("KAGGLE_STATUS", "offline")
+    if not KAGGLE_API_URL:
+        await update.message.reply_text("🔴 Qwen is offline. Start the Kaggle notebook first.")
+        return
 
-    if kaggle_status.lower() == "online":
-        status_msg = "🟢 *Qwen is online and ready.*"
-    else:
-        status_msg = "🔴 *Qwen session ended.*"
-
-    pending = github_storage.get_pending_requests()
-    if pending:
-        status_msg += f"\n\n📋 *{len(pending)} pending request(s)*"
-
-    await update.message.reply_text(status_msg, parse_mode="Markdown")
+    try:
+        response = requests.get(f"{KAGGLE_API_URL}/health", timeout=5)
+        if response.status_code == 200:
+            await update.message.reply_text("🟢 *Qwen is online and ready!*", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("🔴 Qwen is having issues.")
+    except:
+        await update.message.reply_text("🔴 Qwen is offline. Start the Kaggle notebook.")
 
 
 async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -168,7 +149,6 @@ async def news_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await query.edit_message_text("❌ Article not found.")
         return
 
-    # Store article in user context
     context.user_data["active_article"] = article
     context.user_data["article_id"] = str(article.get("url", f"article_{index}"))
     context.user_data["awaiting_article_text"] = True
@@ -190,15 +170,9 @@ async def news_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             msg += f"🔗 [{source_name}]({home})\n"
             shown += 1
 
-    if shown == 0:
-        url = article.get("url", "")
-        if url:
-            msg += f"🔗 [Read Article]({url})\n"
-
     msg += (
         f"\n📝 *Next step:*\n"
-        f"Copy-paste the full article text here.\n"
-        f"I'll generate AI SANGH Stage 1 content."
+        f"Copy-paste the full article text here."
     )
 
     await query.edit_message_text(msg, parse_mode="Markdown")
@@ -215,41 +189,36 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         article_id = context.user_data.get("article_id", "unknown")
         article_title = article.get("title", "Unknown")
 
-        # Add to conversation memory
-        github_storage.add_to_conversation(article_id, "user_article", text)
-
-        # Create generation request
-        user_id = update.effective_user.id
-        chat_id = update.effective_chat.id
-
-        request = github_storage.add_request(
-            article_id=article_id,
-            article_title=article_title,
-            request_type="generate",
-            user_message=text,
-            user_id=user_id,
-            chat_id=chat_id,
-        )
-
         context.user_data["awaiting_article_text"] = False
-        context.user_data["awaiting_stage1"] = True
 
-        response_msg = (
-            f"✅ *Article received!*\n\n"
-            f"📰 {article_title}\n\n"
-            f"⏳ Generating AI SANGH Stage 1...\n"
-            f"Check back in a moment."
+        # Call Kaggle API directly
+        await call_kaggle_api(
+            update, context, article_id, article_title, "generate", text
         )
-
-        await update.message.reply_text(response_msg, parse_mode="Markdown")
         return
 
-    # Check for generation commands
-    if text_lower in [cmd.lower() for cmd in GENERATION_COMMANDS]:
+    # Generation commands
+    generation_commands = [
+        "generate", "shorter", "longer", "more viral", "carousel",
+        "caption", "30 second reel", "60 second reel", "proceed"
+    ]
+
+    if text_lower in [cmd.lower() for cmd in generation_commands]:
+        article = context.user_data.get("active_article")
+        if not article:
+            await update.message.reply_text("❌ No article selected. Use /news first.")
+            return
+
         original_cmd = text_lower if text_lower == "proceed" else next(
-            (cmd for cmd in GENERATION_COMMANDS if cmd.lower() == text_lower), text_lower
+            (cmd for cmd in generation_commands if cmd.lower() == text_lower), text_lower
         )
-        await _process_generation_command(original_cmd, None, context, update)
+
+        article_id = context.user_data.get("article_id", "unknown")
+        article_title = article.get("title", "Unknown")
+
+        await call_kaggle_api(
+            update, context, article_id, article_title, original_cmd, original_cmd
+        )
         return
 
     # Number selection
@@ -279,78 +248,84 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         msg += f"🔗 [{source_name}]({home})\n"
                         shown += 1
 
-                msg += (
-                    f"\n📝 *Next step:*\n"
-                    f"Copy-paste the full article text here."
-                )
+                msg += f"\n📝 *Next step:*\nCopy-paste the full article text here."
                 await update.message.reply_text(msg, parse_mode="Markdown")
                 return
 
-    # If user sends text without selecting topic first, treat as feedback
+    # If we have an active article, treat text as feedback
     article = context.user_data.get("active_article")
     if article:
-        await _process_generation_command(text, None, context, update)
+        article_id = context.user_data.get("article_id", "unknown")
+        article_title = article.get("title", "Unknown")
+        await call_kaggle_api(
+            update, context, article_id, article_title, text_lower, text
+        )
         return
 
     await update.message.reply_text(
-        "🤔 I don't understand.\n\n"
-        "Use /news to see topics or /help for commands."
+        "🤔 I don't understand.\n\nUse /news to see topics or /help for commands."
     )
 
 
-async def _process_generation_command(
-    command: str,
-    query,
+async def call_kaggle_api(
+    update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    update: Update = None,
+    article_id: str,
+    article_title: str,
+    request_type: str,
+    article_text: str,
 ) -> None:
-    """Process a generation command."""
-    article = context.user_data.get("active_article")
-    if not article:
-        msg = "❌ No article selected. Use /news first."
-        if query:
-            await query.edit_message_text(msg)
-        elif update:
-            await update.message.reply_text(msg)
+    """Call Kaggle API and send result to Telegram."""
+    if not KAGGLE_API_URL:
+        await update.message.reply_text(
+            "🔴 Qwen is offline.\n\nStart the Kaggle notebook first."
+        )
         return
 
-    article_id = context.user_data.get("article_id", "unknown")
-    article_title = article.get("title", "Unknown")
+    # Show typing indicator
+    await update.message.chat.send_action("typing")
 
-    user_id = update.effective_user.id if update else (query.from_user.id if query else None)
-    chat_id = update.effective_chat.id if update else (query.message.chat_id if query else None)
+    try:
+        payload = {
+            "article_title": article_title,
+            "article_text": article_text,
+            "request_type": request_type,
+            "article_id": article_id,
+        }
 
-    # Get conversation history for context
-    conversation = github_storage.get_conversation(article_id)
-    context_text = "\n".join([f"{msg['role']}: {msg['content'][:200]}" for msg in conversation[-5:]]) if conversation else ""
+        response = requests.post(
+            f"{KAGGLE_API_URL}/generate",
+            json=payload,
+            timeout=120,
+        )
 
-    request = github_storage.add_request(
-        article_id=article_id,
-        article_title=article_title,
-        request_type=command,
-        user_message=command + (f"\n\nPrevious context:\n{context_text}" if context_text else ""),
-        user_id=user_id,
-        chat_id=chat_id,
-    )
+        if response.status_code == 200:
+            data = response.json()
+            result = data.get("result", "No result generated.")
 
-    pending = github_storage.get_pending_requests()
-    position = next(
-        (i + 1 for i, r in enumerate(pending) if r["id"] == request["id"]),
-        len(pending),
-    )
+            # Save to local memory
+            if article_id not in conversations:
+                conversations[article_id] = []
+            conversations[article_id].append({"role": "user", "content": article_text[:200]})
+            conversations[article_id].append({"role": "assistant", "content": result[:200]})
 
-    response_msg = (
-        f"✅ *Queued!*\n\n"
-        f"📰 {article_title}\n"
-        f"🎯 {command}\n"
-        f"📍 Position: {position}\n\n"
-        f"⏳ Processing when Qwen is available."
-    )
+            # Send result
+            msg = f"✅ *{request_type.title()}* for:\n📰 {article_title}\n\n{result}"
 
-    if query:
-        await query.edit_message_text(response_msg, parse_mode="Markdown")
-    elif update:
-        await update.message.reply_text(response_msg, parse_mode="Markdown")
+            # Split if too long
+            if len(msg) > 4000:
+                chunks = [msg[i:i+4000] for i in range(0, len(msg), 4000)]
+                for chunk in chunks:
+                    await update.message.reply_text(chunk, parse_mode=None)
+            else:
+                await update.message.reply_text(msg, parse_mode=None)
+        else:
+            await update.message.reply_text("❌ Error generating content. Try again.")
+
+    except requests.exceptions.Timeout:
+        await update.message.reply_text("⏳ Still generating... This may take a minute.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)[:100]}")
 
 
 def create_bot() -> Application:
@@ -377,6 +352,10 @@ def create_bot() -> Application:
 
 def main() -> None:
     """Start the Telegram bot."""
+    if not KAGGLE_API_URL:
+        print("WARNING: KAGGLE_API_URL not set!")
+        print("Start the Kaggle notebook and update .env with the API URL.")
+
     application = create_bot()
     logger.info("Starting Telegram bot...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
